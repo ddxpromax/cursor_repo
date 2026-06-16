@@ -70,12 +70,12 @@ def normalize_spaces(value: str) -> str:
 
 def department_from_code(course_code: str) -> str:
     match = re.match(r"([A-Za-z]+)", course_code.strip())
-    return match.group(1).upper() if match else course_code.strip()
+    return match.group(1).upper() if match else "未知"
 
 
 def parse_course_title(anchor_html: str) -> tuple[str, str, str]:
     code_match = re.search(r'<span[^>]*class="[^"]*badge[^"]*"[^>]*>(.*?)</span>', anchor_html, re.S)
-    course_code = normalize_spaces(strip_tags(code_match.group(1))) if code_match else ""
+    course_code = normalize_spaces(strip_tags(code_match.group(1))) if code_match else "未知"
 
     before_badge = anchor_html.split("<span", 1)[0]
     title_text = normalize_spaces(strip_tags(before_badge))
@@ -109,7 +109,9 @@ def parse_course_list(html_text: str) -> tuple[int, list[CourseRow]]:
 
         course_name, course_code, professor_name = parse_course_title(anchor_match.group("title"))
         term_match = re.search(r'<span class="small text-body-secondary">\s*(.*?)</span>', card_html, re.S)
-        latest_term = normalize_spaces(strip_tags(term_match.group(1))).replace("...", "") if term_match else ""
+        latest_term = normalize_spaces(strip_tags(term_match.group(1))).replace("...", "") if term_match else "未知"
+        if not latest_term:
+            latest_term = "未知"
         rating_match = re.search(r'<span class="rl-pd-sm h4 mono-font">\s*([^<]+?)\s*</span>', card_html)
         count_match = re.search(r"\((\d+)\s*人评价\)", card_html)
         rating = normalize_spaces(strip_tags(rating_match.group(1))) if rating_match else ""
@@ -208,6 +210,8 @@ def enrich_departments(courses: list[CourseRow], workers: int) -> None:
             if department:
                 courses[index].department = department
             if note:
+                if courses[index].department == "未知" and "使用课程代号前缀" in note:
+                    note = note.replace("使用课程代号前缀", "课程代号为空，标记为未知")
                 existing_note = courses[index].note
                 courses[index].note = f"{existing_note}; {note}" if existing_note else note
             completed += 1
