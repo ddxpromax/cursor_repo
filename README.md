@@ -1,164 +1,201 @@
-# SUSTech TIS 课表导出流程
+# SUSTech TIS 课表导出 SOP
 
-## 目的
+## 目标
 
-这份 README 用来记录一个稳定流程：  
-从 SUSTech 教务系统网页中抓取课程 JSON，再由 agent 生成可读的 Excel 表格。
+从 `全校课表（本研）` 页面抓到**完整课程 JSON**，再生成 Excel。
 
-适用场景：
-- 用户能登录 `https://tis.sustech.edu.cn/authentication/main`
-- 页面可能要求校园网或校园 VPN
-- 目标是导出 `全校课表（本研）`，例如 `2026秋季`
+核心原则：**先抓真实接口 JSON，不要先抓 DOM 表格。**
 
-## 核心原则
+## 用户做什么
 
-**不要先抓网页里渲染出来的 HTML 表格。**
+1. 在校园网或 VPN 环境里登录教务系统。
+2. 打开 `全校课表（本研）`，切到目标学期，例如 `2026秋季`。
+3. 打开浏览器 Console，运行下面脚本。
+4. 手动点击一次 `查询`。
+5. 等待浏览器自动下载合并后的 JSON。
+6. 把 JSON 上传给 agent。
 
-稳定流程应该是：
-1. 用户在自己的浏览器里登录并打开目标页面
-2. 用户按 agent 给的脚本抓取真实课程接口 JSON
-3. agent 用完整 JSON 生成 Excel
+## agent 做什么
 
-这样比直接抓 DOM、猜分页控件要稳定得多。
+1. 检查 JSON 是否为全量：
+   - 看 `total`
+   - 看 `mergedCount`
+   - 看 `list.length`
+2. 如果不是全量，让用户重新抓。
+3. 如果是全量，用 JSON 生成 Excel。
+4. 按需要输出：
+   - 全量版：`exports/sustech_2026_fall_all_courses_full.xlsx`
+   - 本科版：`exports/sustech_2026_fall_undergrad_courses.xlsx`
+5. 交付前检查：
+   - 全量版行数正确
+   - 本科版没有 `研 / 研究生`
 
-## 分工
+## 抓取 JSON 的 Console 代码
 
-### 用户要做的事
+把下面整段粘到浏览器 Console 里，再点一次 `查询`：
 
-1. 在能正常访问教务系统的环境里打开浏览器。
-2. 如果系统要求校园网或 VPN，就先连好。
-3. 打开 `全校课表（本研）` 页面。
-4. 切换到目标学期，例如 `2026秋季`。
-5. 按 agent 提供的说明，在浏览器 Console 里运行脚本。
-6. 手动点击一次 `查询`，触发真实的数据请求。
-7. 把下载下来的 JSON 文件上传给 agent。
-8. 如有需要，明确最终要保留哪些版本：
-   - 全量版
-   - 本科版
-   - 研究生版
+```javascript
+(() => {
+  const PAGE_KEYS = ['pageNum', 'page', 'pageNo', 'current'];
+  const SIZE_KEYS = ['pageSize', 'limit', 'size', 'rows'];
 
-### agent 要做的事
+  const looksLikeCourseResp = text => {
+    try {
+      const j = JSON.parse(text);
+      return !!(j && typeof j === 'object' && j.rwList && Array.isArray(j.rwList.list) && typeof j.total !== 'undefined');
+    } catch {
+      return false;
+    }
+  };
 
-1. 先假设云端环境可能**无法直接登录**教务系统。
-2. 不把 DOM 抓取当成主方案。
-3. 给用户一段 Console 脚本，用来捕获真实课程接口响应。
-4. 判断用户上传的是：
-   - 只有单页的数据
-   - 还是已经合并好的全量 JSON
-5. 如果只有单页：
-   - 检查 `total`、`pageSize`、`pages`
-   - 明确告诉用户还需要抓全量
-6. 拿到全量 JSON 后，生成可读的 Excel。
-7. 在交付前核对行数。
-8. 如果用户要求上传到 GitHub，就把最终文件放到 `exports/`，然后提交、推送、更新 PR。
+  const parseJSON = text => {
+    try { return JSON.parse(text); } catch { return null; }
+  };
 
-## 推荐抓取流程
+  const cloneHeaders = headersObj => {
+    const out = {};
+    for (const [k, v] of Object.entries(headersObj || {})) {
+      const key = String(k).toLowerCase();
+      if (['content-length', 'host', 'origin', 'referer'].includes(key)) continue;
+      out[k] = v;
+    }
+    return out;
+  };
 
-浏览器侧的目标是抓到**真实 API JSON**，不是屏幕上可见的表格行。
+  const bodyToText = body => {
+    if (body == null) return null;
+    if (typeof body === 'string') return body;
+    if (body instanceof URLSearchParams) return body.toString();
+    if (body instanceof FormData) {
+      const usp = new URLSearchParams();
+      for (const [k, v] of body.entries()) usp.append(k, v);
+      return usp.toString();
+    }
+    try { return JSON.stringify(body); } catch { return null; }
+  };
 
-推荐流程：
-1. 在 Console 里安装临时监听脚本
-2. 点击 `查询`
-3. 让脚本识别课程接口响应
-4. 如果需要，自动补抓剩余分页
-5. 最终下载一个合并好的 JSON 文件
+  const setPagingInUrl = (urlText, pageNum, pageSize) => {
+    const u = new URL(urlText, location.origin);
+    for (const k of PAGE_KEYS) {
+      if (u.searchParams.has(k)) u.searchParams.set(k, String(pageNum));
+    }
+    for (const k of SIZE_KEYS) {
+      if (u.searchParams.has(k)) u.searchParams.set(k, String(pageSize));
+    }
+    return u.toString();
+  };
 
-理想的合并 JSON 至少应该包含：
-- `total`
-- `pageSize`
-- `pages`
-- `mergedCount`
-- `list`
+  const setPagingInBody = (bodyText, headers, pageNum, pageSize) => {
+    if (bodyText == null) return null;
+    const ct = String(headers['Content-Type'] || headers['content-type'] || '').toLowerCase();
 
-如果上传的文件里只有第 1 页数据，那还不能直接生成最终 Excel。
+    if (ct.includes('application/json') || bodyText.trim().startsWith('{')) {
+      try {
+        const obj = JSON.parse(bodyText);
+        for (const k of PAGE_KEYS) obj[k] = pageNum;
+        for (const k of SIZE_KEYS) obj[k] = pageSize;
+        return JSON.stringify(obj);
+      } catch {}
+    }
 
-## 推荐生成流程
+    try {
+      const usp = new URLSearchParams(bodyText);
+      for (const k of PAGE_KEYS) usp.set(k, String(pageNum));
+      for (const k of SIZE_KEYS) usp.set(k, String(pageSize));
+      return usp.toString();
+    } catch {}
 
-agent 在拿到最终 JSON 后，建议按下面步骤处理：
+    return bodyText;
+  };
 
-1. 先确认：
-   - 总记录数
-   - 合并后记录数
-   - 总页数
-2. 生成一个 `整理版` 工作表，放用户真正要看的字段，例如：
-   - 教学班
-   - 培养类型
-   - 培养层次
-   - 课程代码
-   - 课程名称
-   - 课程英文名
-   - 课程性质
-   - 课程类别
-   - 授课语言
-   - 学分
-   - 学时
-   - 授课教师
-   - 上课信息
-   - 选课要求
-   - 开课院系
-3. 再生成一个 `接口原字段` 工作表，保留原始字段，方便核对。
-4. 再加一个 `说明` 工作表，记录：
-   - 来源文件名
-   - 总行数
-   - 过滤条件
-   - 当前文件是全量版还是本科版
+  async function replayAllPages(meta, firstJson) {
+    const total = Number(firstJson.total || firstJson.rwList?.total || 0);
+    const pageSize = Number(firstJson.pageSize || firstJson.rwList?.pageSize || 500);
+    const pages = Number(firstJson.rwList?.pages || Math.ceil(total / pageSize) || 1);
 
-## 推荐最终文件
+    const all = [];
+    for (let p = 1; p <= pages; p++) {
+      const headers = cloneHeaders(meta.headers);
+      const finalUrl = setPagingInUrl(meta.url, p, pageSize);
+      const finalBody = meta.method === 'GET' ? undefined : setPagingInBody(meta.bodyText, headers, p, pageSize);
 
-建议最终只保留这两个文件：
-- `exports/sustech_2026_fall_all_courses_full.xlsx`
-- `exports/sustech_2026_fall_undergrad_courses.xlsx`
+      const resp = await fetch(finalUrl, {
+        method: meta.method,
+        headers,
+        body: finalBody,
+        credentials: 'include'
+      });
 
-含义：
-- `full`：保留完整课程数据
-- `undergrad`：去掉所有 `研 / 研究生` 课程
+      const text = await resp.text();
+      const json = parseJSON(text);
+      if (!json || !json.rwList || !Array.isArray(json.rwList.list)) {
+        throw new Error(`第 ${p} 页返回不是预期课程 JSON`);
+      }
+      all.push(...json.rwList.list);
+    }
 
-## 交付前检查
+    const merged = {
+      total,
+      pageSize,
+      pages,
+      mergedCount: all.length,
+      list: all
+    };
 
-agent 交付前至少要检查：
+    const blob = new Blob(
+      [JSON.stringify(merged, null, 2)],
+      { type: 'application/json;charset=utf-8' }
+    );
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `tis_course_all_pages_${Date.now()}.json`;
+    a.click();
 
-1. `full` 的行数和全量 JSON 一致。
-2. `undergrad` 中没有任何 `研` 或 `研究生` 行。
-3. `exports/` 里只剩最终应保留的文件。
-4. 如果用户要求清理，就删掉旧的半成品文件和中间 JSON。
+    console.log(`全部完成：合并后 ${all.length} 条，已下载 JSON 文件。`);
+  }
 
-## 常见失败点
+  let triggered = false;
+  const origOpen = XMLHttpRequest.prototype.open;
+  const origSend = XMLHttpRequest.prototype.send;
+  const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
 
-### 1. 云端 agent 登录不上教务系统
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    this.__tis_meta = { method: method || 'GET', url, headers: {} };
+    return origOpen.call(this, method, url, ...rest);
+  };
 
-常见原因：
-- 系统要求校园网或校园 VPN
+  XMLHttpRequest.prototype.setRequestHeader = function(k, v) {
+    if (this.__tis_meta) this.__tis_meta.headers[k] = v;
+    return origSetHeader.call(this, k, v);
+  };
 
-应对：
-- 不要在云端环境里反复死试登录
-- 直接切换到“用户本地浏览器抓 JSON”的流程
+  XMLHttpRequest.prototype.send = function(body) {
+    if (this.__tis_meta) this.__tis_meta.bodyText = bodyToText(body);
 
-### 2. 直接抓 DOM 得到的行数不对
+    this.addEventListener('load', async function() {
+      if (triggered) return;
+      const text = this.responseText || '';
+      if (!looksLikeCourseResp(text)) return;
 
-常见原因：
-- 页面表格可能有克隆层、虚拟列表、隐藏分页状态
+      triggered = true;
+      const json = JSON.parse(text);
+      console.log('已捕获课程接口，开始自动抓全量...');
+      try {
+        await replayAllPages(this.__tis_meta, json);
+      } catch (e) {
+        console.error('自动抓全量失败：', e);
+      }
+    });
 
-应对：
-- 停止抓 DOM
-- 改抓真实 API JSON
+    return origSend.call(this, body);
+  };
 
-### 3. 用户上传的 JSON 只有第 1 页
+  console.log('监听已安装。现在请手动点一次页面上的“查询”。');
+})();
+```
 
-识别信号：
-- `total` 明显大于 `list.length`
+## 常见坑
 
-应对：
-- 明确告诉用户：这不是全量
-- 让用户重新运行“自动合并分页”的抓取脚本
-
-## 最短版
-
-给未来 agent 的一句话流程：
-
-1. 用户在本地校园网环境里登录教务系统。
-2. 用户打开 `全校课表（本研）` 并切到目标学期。
-3. agent 提供 Console 脚本，抓并合并课程接口 JSON。
-4. 用户上传合并后的 JSON。
-5. agent 生成 Excel。
-6. agent 核对行数。
-7. 如有需要，agent 把最终文件提交到 `exports/`。
+1. 云端 agent 登录不上：通常是校园网 / VPN 限制，不要硬试，改走用户本地浏览器抓 JSON。
+2. 抓 DOM 行数不对：页面可能有克隆层或虚拟列表，直接改抓 API JSON。
+3. 上传的 JSON 只有第 1 页：如果 `total` 明显大于 `list.length`，说明不是全量。
